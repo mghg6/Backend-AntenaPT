@@ -1,0 +1,6 @@
+@Impinj_Reader_HostAddress = http://localhost:5090
+
+GET {{Impinj_Reader_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

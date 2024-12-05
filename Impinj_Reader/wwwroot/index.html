@@ -1,0 +1,41 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>RFID Asociaciones</title>
+</head>
+<body>
+
+    <div id="content">
+        <h3>Asociaciones Completadas:</h3>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@3.1.8/dist/browser/signalr.min.js"></script>
+
+    <script type="text/javascript">
+        // Configuración de SignalR
+        const connection = new signalR.HubConnectionBuilder()
+            .withUrl("/message")
+            .build();
+
+        // Iniciar la conexión
+        connection.start()
+            .then(() => {
+                console.log("Conexión exitosa con SignalR.");
+            })
+            .catch((error) => console.error("Error al conectar:", error));
+
+        // Manejar mensajes de SignalR
+        connection.on("sendMessage", (message) => {
+            console.log("Mensaje recibido desde SignalR:", message);
+            document.getElementById("content").innerHTML += `
+        <div>Asociación completada: Tarima ${message.tarima} con Operador ${message.operador}</div>
+    `;
+        });
+
+
+        
+    </script>
+
+</body>
+</html>
