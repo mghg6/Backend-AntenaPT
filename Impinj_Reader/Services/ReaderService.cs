@@ -1,5 +1,4 @@
-﻿using System.Collections.Generic;
-using Impinj.OctaneSdk;
+﻿using Impinj.OctaneSdk;
 using Impinj_Reader.Hubs;
 using Microsoft.AspNetCore.SignalR;
 
@@ -10,11 +9,14 @@ namespace Impinj_Reader.Services
         private readonly ReaderSettings _readerSettingsService;
         private readonly ImpinjReader _reader;
         private readonly HashSet<string> _seenEpcs; // Para evitar duplicados
-        private string _currentTarima; // EPC de la última tarima detectada
+        private Dictionary<string, List<string>> _activeTarimas = new Dictionary<string, List<string>>();
         private readonly List<(string Tarima, string Operador)> _associations; // Log de asociaciones
         private readonly IHubContext<MessageHub> _hubContext; // SignalR
         private const int LogLevel = 2; // 0 = Nada, 1 = Básico, 2 = Detallado
-        private const string ReaderHostname = "172.16.100.198"; // Ip del lector
+        private const string ReaderHostname = "172.16.100.197"; // Ip del lector
+        private Dictionary<string, DateTime> _pendingAssociations = new Dictionary<string, DateTime>();
+        private readonly int _timeoutSeconds = 5; // Tiempo límite para completar la asociación
+
 
         public ReaderService(ReaderSettings readerSettingsService, IHubContext<MessageHub> hubContext)
         {
@@ -75,9 +77,18 @@ namespace Impinj_Reader.Services
                 {
                     if (_seenEpcs.Add(epc))
                     {
-                        _currentTarima = epc;
-                        Log($"Tarima detectada: {epc}", 1);
-                        Log($"Estado actual de Tarima: {_currentTarima}", 2);
+                        // Si no existe una entrada para la tarima, crea una nueva
+                        if (!_activeTarimas.ContainsKey(epc))
+                        {
+                            _activeTarimas[epc] = new List<string>();
+                        }
+
+                        // Agrega el EPC al grupo de tarimas activas
+                        _activeTarimas[epc].Add(epc);
+                        Log($"Tarima detectada y registrada: {epc}", 1);
+
+                        _pendingAssociations[epc] = DateTime.UtcNow;
+                        _ = CheckTimeout(epc); // Inicia el timeout
                     }
                     else
                     {
@@ -88,29 +99,27 @@ namespace Impinj_Reader.Services
                 {
                     Log($"Pulsera detectada: {epc}", 1);
 
-                    if (_currentTarima != null)
+                    // Asociar la pulsera a todas las tarimas activas
+                    foreach (var tarima in _activeTarimas.Keys.ToList())
                     {
-                        // Realiza la asociación
-                        Log($"Asociación completada: Tarima {_currentTarima} con Operador {epc}", 1);
-
-                        Log($"Enviando mensaje a SignalR: Tarima {_currentTarima}, Operador {epc}", 1);
-                        await _hubContext.Clients.All.SendAsync("sendMessage", new
+                        // Envía un mensaje por SignalR para cada EPC de la tarima
+                        foreach (var tarimaEpc in _activeTarimas[tarima])
                         {
-                            Type = "Asociación",
-                            Tarima = _currentTarima,
-                            Operador = epc,
-                            Timestamp = DateTime.UtcNow
-                        });
-                        Console.WriteLine($"Mensaje enviado a SignalR: {{ Type: Asociación, Tarima: {_currentTarima}, Operador: {epc}, Timestamp: {DateTime.UtcNow} }}");
+                            Log($"Asociación completada: Tarima {tarimaEpc} con Operador {epc}", 1);
+                            await _hubContext.Clients.All.SendAsync("sendMessage", new
+                            {
+                                Type = "Asociación",
+                                Tarima = tarimaEpc,
+                                Operador = epc,
+                                Timestamp = DateTime.UtcNow
+                            });
+                            Console.WriteLine($"Mensaje enviado a SignalR: {{ Type: Asociación, Tarima: {tarimaEpc}, Operador: {epc}, Timestamp: {DateTime.UtcNow} }}");
+                        }
 
-
-                        // Reinicia el estado de tarima
-                        _currentTarima = null;
-                        Log("Estado de Tarima reiniciado.", 2);
-                    }
-                    else
-                    {
-                        Log($"Pulsera detectada sin tarima activa: {epc}", 1);
+                        // Limpia las asociaciones pendientes
+                        _activeTarimas.Remove(tarima);
+                        _pendingAssociations.Remove(tarima);
+                        Log($"Estado de Tarima {tarima} reiniciado.", 2);
                     }
                 }
                 else
@@ -119,6 +128,41 @@ namespace Impinj_Reader.Services
                 }
             }
         }
+
+
+        private async Task CheckTimeout(string epc)
+        {
+            await Task.Delay(_timeoutSeconds * 1000); // Espera el tiempo definido
+
+            // Verifica si el EPC sigue pendiente después del timeout
+            if (_pendingAssociations.ContainsKey(epc) && DateTime.UtcNow.Subtract(_pendingAssociations[epc]).TotalSeconds >= _timeoutSeconds)
+            {
+                Log($"Timeout alcanzado para EPC: {epc}. Eliminando de asociaciones pendientes.", 2);
+
+                // Si es una tarima, notificar por SignalR como incompleta
+                if (_activeTarimas.ContainsKey(epc))
+                {
+                    Log($"Timeout: Tarima {epc} no se asoció con un operador.", 1);
+
+                    // Enviar mensaje por SignalR
+                    await _hubContext.Clients.All.SendAsync("sendMessage", new
+                    {
+                        Type = "Asociación Incompleta",
+                        Tarima = epc,
+                        Operador = "Indefinido",
+                        Timestamp = DateTime.UtcNow
+                    });
+
+                    // Limpiar el EPC de las asociaciones pendientes
+                    _activeTarimas.Remove(epc);
+                }
+
+                // Eliminar del diccionario de asociaciones pendientes
+                _pendingAssociations.Remove(epc);
+            }
+        }
+
+
 
 
 
@@ -133,14 +177,14 @@ namespace Impinj_Reader.Services
 
 
 
-        private void AssociateTarimaWithOperator(string tarima, string operador)
-        {
-            // Guardar la asociación
-            _associations.Add((tarima, operador));
-            Console.WriteLine($"Asociación completada: Tarima {tarima} con Operador {operador}");
+        //private void AssociateTarimaWithOperator(string tarima, string operador)
+        //{
+        //    // Guardar la asociación
+        //    _associations.Add((tarima, operador));
+        //    Console.WriteLine($"Asociación completada: Tarima {tarima} con Operador {operador}");
 
-            // Aquí podrías emitir un evento o llamar a un servicio para notificar al frontend
-        }
+        //    // Aquí podrías emitir un evento o llamar a un servicio para notificar al frontend
+        //}
 
         private void OnKeepaliveReceived(ImpinjReader reader)
         {

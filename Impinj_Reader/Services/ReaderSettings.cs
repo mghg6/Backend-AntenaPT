@@ -30,8 +30,8 @@ namespace Impinj_Reader.Services
                 for (ushort i = 1; i <= 13; i++)
                 {
                     AntennaConfig antennaConfig = settings.Antennas.GetAntenna(i);
-                    antennaConfig.TxPowerInDbm = 25; // Potencia de transmisión en dBm
-                    antennaConfig.RxSensitivityInDbm = -70; // Sensibilidad del receptor
+                    antennaConfig.TxPowerInDbm = 28; // Potencia de transmisión en dBm
+                    antennaConfig.RxSensitivityInDbm = -58; // Sensibilidad del receptor
                 }
 
                 // Aplicar y guardar configuración
